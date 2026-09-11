@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Kaos på Ön – Multiplayer</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#111827;color:#fff;font-family:Arial,sans-serif;overflow:hidden}
+#top{position:fixed;top:0;left:0;right:0;height:62px;background:#172033dd;display:flex;align-items:center;justify-content:space-between;padding:0 22px;z-index:5}
+h1{font-size:22px;margin:0}.stats{display:flex;gap:20px;font-weight:bold}
+#game{display:block;margin:62px auto 0;background:#58b8df;max-width:100vw;max-height:calc(100vh - 62px)}
+#help{position:fixed;left:15px;bottom:15px;background:#172033dd;padding:10px 14px;border-radius:10px}
+#mission{position:fixed;right:15px;bottom:15px;background:#172033dd;padding:12px 15px;border-radius:10px;max-width:300px}
+#lobby{position:fixed;inset:0;background:#0b1220ee;z-index:30;display:flex;align-items:center;justify-content:center}
+#lobbyBox{width:min(430px,92vw);background:#172033;padding:28px;border-radius:20px;box-shadow:0 20px 60px #0008;text-align:center}
+#lobbyBox h2{margin:0 0 8px;font-size:32px}.lobbyRow{display:flex;gap:10px;margin:10px 0}
+.lobbyRow input{flex:1;padding:12px;border-radius:10px;border:1px solid #475569;background:#0f172a;color:#fff;font-size:18px;text-align:center;letter-spacing:3px}
+.lobbyBtn{flex:1;padding:12px;border:0;border-radius:10px;background:#2563eb;color:white;font-weight:bold;font-size:16px;cursor:pointer}
+.lobbyBtn.secondary{background:#334155}.lobbyBtn:disabled{opacity:.5;cursor:not-allowed}
+#status{min-height:24px;color:#fbbf24;font-weight:bold;margin:12px 0}#roomCode{font-size:34px;letter-spacing:8px;font-weight:bold;margin:18px 0}
+#roomInfo{position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:6;background:#172033ee;padding:7px 14px;border-radius:10px;display:none;font-weight:bold}
+</style>
+</head>
+<body>
+<div id="top"><h1>🏝️ KAOS PÅ ÖN</h1><div class="stats">
+<span id="round">Runda 1</span><span id="timer">05:00</span><span id="hp">❤️ 100</span><span id="net">🔴 Offline</span>
+</div></div>
+
+<div id="lobby"><div id="lobbyBox">
+<h2>🏝️ Kaos på Ön</h2>
+<p>Spela med dina kompisar med en rumskod.</p>
+<div id="status">Ansluter...</div>
+<button class="lobbyBtn" id="create">Skapa rum</button>
+<div class="lobbyRow"><input id="codeInput" maxlength="4" placeholder="RUMSKOD" autocomplete="off"><button class="lobbyBtn secondary" id="join">Gå med</button></div>
+<div id="roomCode"></div>
+<p id="hint" style="display:none">Skicka koden till kompisen.</p>
+</div></div>
+<div id="roomInfo"></div>
+<canvas id="game" width="1100" height="650"></canvas>
+<div id="help">WASD / piltangenter = gå • SPACE = knuff</div>
+<div id="mission">🎯 <b>Hemligt uppdrag</b><br>Förstör 3 träd!</div>
+
+<script>
+const c=document.getElementById("game"),x=c.getContext("2d"),keys={};
+let player={x:550,y:330,hp:100},trees=[
+{x:180,y:180},{x:260,y:270},{x:850,y:170},{x:900,y:420},{x:280,y:480},{x:760,y:500}
+];
+let npcs=[
+{x:390,y:280,c:"#ef4444",alive:true},{x:690,y:290,c:"#f59e0b",alive:true},{x:520,y:470,c:"#a855f7",alive:true}
+];
+let remotePlayers={},socket=null,myId=null,inRoom=false,roomCode="",start=Date.now(),round=1,message="";
+const SERVER_URL="ws://127.0.0.1:8080";
+
+addEventListener("keydown",e=>{keys[e.key.toLowerCase()]=true;if(e.code==="Space"){e.preventDefault();knock();}});
+addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
+
+function setStatus(t){document.getElementById("status").textContent=t}
+function connect(){
+ if(socket&&(socket.readyState===WebSocket.OPEN||socket.readyState===WebSocket.CONNECTING))return;
+ try{
+  socket=new WebSocket(SERVER_URL);
+  socket.onopen=()=>{document.getElementById("net").textContent="🟢 Online";setStatus("Online – skapa ett rum eller gå med.");};
+  socket.onmessage=e=>{
+   const d=JSON.parse(e.data);
+   if(d.type==="welcome"){myId=d.id;return;}
+   if(d.type==="room_created"||d.type==="room_joined"){
+    roomCode=d.code;inRoom=true;remotePlayers=d.players||{};
+    document.getElementById("lobby").style.display="none";
+    const ri=document.getElementById("roomInfo");ri.style.display="block";ri.textContent="🔑 Rum: "+roomCode;
+    resetGame(); return;
+   }
+   if(d.type==="room_state"){remotePlayers=d.players||{};return;}
+   if(d.type==="hit"){player.hp=d.hp;message="💥 Du blev knuffad!";if(player.hp<=0){player.hp=100;player.x=550;player.y=330;message="🔄 Du återuppstod!";}}
+   if(d.type==="knock"){message=d.message||"💥 Knuff!";}
+   if(d.type==="room_error"){setStatus("❌ "+d.message);}
+  };
+  socket.onclose=()=>{document.getElementById("net").textContent="🔴 Offline";inRoom=false;setStatus("Serveranslutningen stängdes.");document.getElementById("lobby").style.display="flex";document.getElementById("roomInfo").style.display="none";};
+  socket.onerror=()=>setStatus("❌ Kunde inte ansluta till servern. Starta server.js i VS Code.");
+ }catch(e){setStatus("❌ Kunde inte ansluta.");}
+}
+document.getElementById("create").onclick=()=>{
+ if(socket?.readyState===WebSocket.OPEN){setStatus("Skapar rum...");socket.send(JSON.stringify({type:"create_room"}));}
+ else{setStatus("Ansluter till servern...");connect();setTimeout(()=>{if(socket?.readyState===WebSocket.OPEN){setStatus("Skapar rum...");socket.send(JSON.stringify({type:"create_room"}));}},300);}
+};
+function joinRoom(){
+ const code=document.getElementById("codeInput").value.trim().toUpperCase();
+ if(!/^[A-Z0-9]{4}$/.test(code)){setStatus("Skriv en kod med 4 tecken.");return;}
+ if(socket?.readyState===WebSocket.OPEN){setStatus("Går med...");socket.send(JSON.stringify({type:"join_room",code}));}
+ else{setStatus("Ansluter till servern...");connect();setTimeout(()=>{if(socket?.readyState===WebSocket.OPEN){setStatus("Går med...");socket.send(JSON.stringify({type:"join_room",code}));}},300);}
+}
+document.getElementById("join").onclick=joinRoom;
+document.getElementById("codeInput").addEventListener("keydown",e=>{if(e.key==="Enter")joinRoom();});
+
+function resetGame(){player={x:550,y:330,hp:100};start=Date.now();round=1;message="";npcs=[
+{x:390,y:280,c:"#ef4444",alive:true},{x:690,y:290,c:"#f59e0b",alive:true},{x:520,y:470,c:"#a855f7",alive:true}
+];}
+
+function island(){x.beginPath();[[80,130],[220,65],[430,85],[610,55],[850,100],[1030,180],[1060,380],[980,540],[790,595],[600,560],[410,600],[210,545],[80,440],[55,270]].forEach((p,i)=>i?x.lineTo(...p):x.moveTo(...p));x.closePath();x.fillStyle="#7dbb50";x.fill();}
+function tree(t){x.fillStyle="#795548";x.fillRect(t.x-6,t.y+10,12,28);x.fillStyle="#246b36";x.beginPath();x.arc(t.x,t.y,28,0,7);x.fill();x.fillStyle="#338a43";x.beginPath();x.arc(t.x-15,t.y+5,22,0,7);x.fill();}
+function draw(){
+ x.clearRect(0,0,c.width,c.height);x.fillStyle="#58b8df";x.fillRect(0,0,c.width,c.height);island();trees.forEach(tree);
+ [[430,170],[760,420]].forEach(p=>{x.fillStyle="#c98b52";x.fillRect(p[0]-35,p[1]-20,70,50);x.fillStyle="#a63e32";x.beginPath();x.moveTo(p[0]-45,p[1]-20);x.lineTo(p[0],p[1]-60);x.lineTo(p[0]+45,p[1]-20);x.fill();});
+ x.fillStyle="#222";x.beginPath();x.arc(575,485,45,0,7);x.fill();x.fillStyle="#555";x.beginPath();x.moveTo(820,330);x.lineTo(870,205);x.lineTo(930,330);x.fill();x.fillStyle="#ef542f";x.beginPath();x.arc(870,210,10,0,7);x.fill();
+ npcs.forEach(p=>{if(p.alive){x.fillStyle=p.c;x.beginPath();x.arc(p.x,p.y,18,0,7);x.fill();}});
+ Object.entries(remotePlayers).forEach(([id,p])=>{if(id!==myId&&p.alive!==false){x.fillStyle=p.color||"#22c55e";x.beginPath();x.arc(p.x,p.y,19,0,7);x.fill();x.fillStyle="#fff";x.font="bold 12px Arial";x.textAlign="center";x.fillText("SPELARE",p.x,p.y-27);}});
+ x.fillStyle="#2563eb";x.beginPath();x.arc(player.x,player.y,19,0,7);x.fill();x.fillStyle="#fff";x.beginPath();x.arc(player.x+7,player.y-5,3,0,7);x.arc(player.x+7,player.y+5,3,0,7);x.fill();
+ if(message){x.fillStyle="#fff";x.font="bold 24px Arial";x.textAlign="center";x.fillText(message,550,90);x.textAlign="left";}
+}
+function knock(){
+ if(!inRoom||!socket||socket.readyState!==WebSocket.OPEN)return;
+ socket.send(JSON.stringify({type:"knock",x:player.x,y:player.y}));
+}
+function update(){
+ let dx=0,dy=0;if(keys.w||keys.arrowup)dy--;if(keys.s||keys.arrowdown)dy++;if(keys.a||keys.arrowleft)dx--;if(keys.d||keys.arrowright)dx++;
+ let l=Math.hypot(dx,dy)||1;player.x+=dx/l*3.5;player.y+=dy/l*3.5;
+ player.x=Math.max(70,Math.min(1030,player.x));player.y=Math.max(70,Math.min(580,player.y));
+ if(inRoom&&socket?.readyState===WebSocket.OPEN){
+  socket.send(JSON.stringify({type:"move",x:player.x,y:player.y,hp:player.hp}));
+ }
+ let sec=Math.max(0,300-Math.floor((Date.now()-start)/1000));document.getElementById("timer").textContent=`${String(Math.floor(sec/60)).padStart(2,"0")}:${String(sec%60).padStart(2,"0")}`;document.getElementById("round").textContent=`Runda ${round}`;document.getElementById("hp").textContent=`❤️ ${Math.max(0,player.hp)}`;
+ if(sec===0){round++;start=Date.now();message="🌋 Ny runda!";}
+ npcs.forEach(p=>{if(p.alive){p.x+=Math.sin(Date.now()/700+p.x)*.5;p.y+=Math.cos(Date.now()/800+p.y)*.5;}});
+ draw();requestAnimationFrame(update);
+}
+connect();update();
+</script>
+</body>
+</html>
